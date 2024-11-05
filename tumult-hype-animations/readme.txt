@@ -5,7 +5,7 @@ Contributors: tumultinc, freeben
 Tags: Hype, Animation
 Requires at least: 5.0
 Requires PHP: 7.4
-Tested up to: 6.6
+Tested up to: 6.7
 Stable tag: trunk
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
@@ -24,6 +24,10 @@ For detailed information and support for this plugin, please visit the [support 
 3. After successful upload, the plugin will generate a shortcode you can use in posts and pages.
 
 == Changelog ==
+
+= 1.9.15 = 
+* Ensure only authors, editors, and admins can access animation information (not subscribers). Thanks to Tieu Pham Trong Nhan for the responsible security disclosure and Wordfence for forwarding the issue. Resolves CVE-2024-10543. 
+
 
 = 1.9.14 = 
 * Add a note to describe your uploaded animation. Notes are autosaved after half a second. 
