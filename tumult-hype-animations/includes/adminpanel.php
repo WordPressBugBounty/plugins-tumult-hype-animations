@@ -39,6 +39,9 @@ function hypeanimations_panel_upload() {
  
         WP_Filesystem();
         $uploaddir = $anims_dir . 'tmp/';
+        if (!file_exists($uploaddir)) {
+            wp_mkdir_p($uploaddir);
+        }
         $uploadfinaldir = $anims_dir;
         $unzipfile = unzip_file($uploadfile, $uploaddir);
         if ($unzipfile) {
@@ -48,9 +51,21 @@ function hypeanimations_panel_upload() {
             if (file_exists($uploaddir . '/config.xml')) {
                 wp_delete_file($uploaddir . '/config.xml');
             }
-
             $new_name = str_replace('.oam', '', basename(sanitize_file_name($_FILES['file']['name'])));
-            rename($uploaddir . 'Assets/' . $new_name . '.hyperesources', $uploaddir . 'Assets/index.hyperesources');
+						$source_dir = $uploaddir . 'Assets/' . $new_name . '.hyperesources';
+						$target_dir = $uploaddir . 'Assets/index.hyperesources';
+
+						// Check if the source directory exists
+						if (!is_dir($source_dir)) {
+								error_log("Source directory does not exist: $source_dir");
+								return new WP_Error('directory_missing', "The directory $source_dir does not exist.");
+						}
+
+						// Attempt to rename the directory
+						if (!rename($source_dir, $target_dir)) {
+								error_log("Failed to rename $source_dir to $target_dir");
+								return new WP_Error('rename_failed', "Failed to rename $source_dir to $target_dir.");
+						}
 
             $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($uploaddir . 'Assets/'), RecursiveIteratorIterator::SELF_FIRST);
             foreach ($files as $file) {
@@ -125,12 +140,14 @@ function hypeanimations_panel_upload() {
                     if (file_exists($uploaddir . 'Assets/')) {
                         hyperrmdir($uploaddir . 'Assets/');
                     }
+                    delete_temp_files($uploaddir);
                 }
             }
             echo $lastid;
             exit();
         } else {
-            echo "Failed to unzip the file.";
+						echo esc_html__('Failed to unzip the file.', 'tumult-hype-animations');
+						delete_temp_files($uploaddir);
             exit();
         }
     }
@@ -172,7 +189,7 @@ Dropzone.options.hypeanimdropzone = { // camelized version of the `id`
 	maxFiles: 1,
 	acceptedFiles: ".oam",
 	timeout: 180000,
-	dictDefaultMessage: "'.__( 'Drop .OAM file or click here to upload<br>(Maximum upload size '. $upload_mb .')' , 'hype-animations' ).'",
+	dictDefaultMessage: "'.__( 'Drop .OAM file or click here to upload<br>(Maximum upload size '. $upload_mb .')' , 'tumult-hype-animations' ).'",
 
 	accept: function(file, done) {
 		if (hasWhiteSpace(file.name)) {
@@ -187,7 +204,7 @@ success: function(file, resp) {
 		jQuery(".dropzone2").css("display", "block");
 		jQuery(".dropzone").remove();	
 	} else {
-		jQuery(".dropzone").after("<div class=\"dropzone2\" style=\"display:none\"><br>'.__( 'Insert the following shortcode where you want to display the animation' , 'hype-animations' ).':<br><br> <span style=\"font-family:monospace\">[hypeanimations_anim id=\"" + resp + "\"]</span></div>");
+		jQuery(".dropzone").after("<div class=\"dropzone2\" style=\"display:none\"><br>'.__( 'Insert the following shortcode where you want to display the animation' , 'tumult-hype-animations' ).':<br><br> <span style=\"font-family:monospace\">[hypeanimations_anim id=\"" + resp + "\"]</span></div>");
 		jQuery(".dropzone2").css("display", "block");
 		jQuery(".dropzone").remove();	
 	}
@@ -198,7 +215,7 @@ success: function(file, resp) {
 		<div>
 			<header>
 				<a href="#fermer" alt="close" id="closeDroper" class="closemodal">&#10005;</a>
-				<h2>'.__( 'Upload new animation' , 'hype-animations' ).'</h2>
+				<h2>'.__( 'Upload new animation' , 'tumult-hype-animations' ).'</h2>
 			</header>
 			<section>
 				<form action="" class="dropzone" id="hypeanimdropzone" title="'. $tooltip_content .'" method="post" accept-charset="utf-8" enctype="multipart/form-data">
@@ -235,17 +252,17 @@ function hypeanimations_panel() {
 	echo '<br><h1>Tumult Hype Animations (v'.$version.')</h1>
 	<p>&nbsp;</p>
 	</div>
-	<h2>'.__( 'Add new animation' , 'hype-animations' ).'</h2>
+	<h2>'.__( 'Add new animation' , 'tumult-hype-animations' ).'</h2>
 	<div class="hypeanimbloc">
-	'.__( 'Upload an .OAM file exported by <a href="https://tumult.com/hype?utm_source=wpplugin">Tumult Hype</a> and a shortcode will be generated which you can insert in posts and pages. <a href="https://forums.tumult.com/t/hype-animations-wordpress-plugin/11074" target="_blank">Need help?</a>' , 'hype-animations' ).'<br><br>
-	<a href="#openModal1" class="button" id="add_hypeanimations_shortcode_newbutton" style="outline: medium none !important; cursor: pointer;" ><i class="dashicons-before dashicons-plus-alt"></i> '.__( 'Upload new animation' , 'hype-animations' ).'</a>
+	'.__( 'Upload an .OAM file exported by <a href="https://tumult.com/hype?utm_source=wpplugin">Tumult Hype</a> and a shortcode will be generated which you can insert in posts and pages. <a href="https://forums.tumult.com/t/hype-animations-wordpress-plugin/11074" target="_blank">Need help?</a>' , 'tumult-hype-animations' ).'<br><br>
+	<a href="#openModal1" class="button" id="add_hypeanimations_shortcode_newbutton" style="outline: medium none !important; cursor: pointer;" ><i class="dashicons-before dashicons-plus-alt"></i> '.__( 'Upload new animation' , 'tumult-hype-animations' ).'</a>
 	</div>';
 	
 	// Verify nonce before delete
 	$delete = isset($_GET['delete']) ? ceil($_GET['delete']) : 0;
 	if ($delete > 0) {
   if ( !wp_verify_nonce($_REQUEST['_wpnonce'], 'delete-animation_' . $delete)) {
-    wp_die('Security check failed'); 
+    wp_die(esc_html__('Security check failed', 'tumult-hype-animations')); 
   }
 			
     $animtitle = $wpdb->get_var($wpdb->prepare("SELECT nom FROM $hypeanimations_table_name WHERE id=%d", ceil($_GET['delete'])));
@@ -253,7 +270,7 @@ function hypeanimations_panel() {
     hyperrmdir($anims_dir.ceil($_GET['delete']).'/');
 
 		if ($animtitle != '') {
-			echo '<p>&nbsp;</p><p><span style="padding:10px;color:#FFF;background:#cc0000;">' . $animtitle . ' ' . __( 'has been deleted.', 'hype-animations' ) . '</span></p>';
+			echo '<p>&nbsp;</p><p><span style="padding:10px;color:#FFF;background:#cc0000;">' . $animtitle . ' ' . __( 'has been deleted.', 'tumult-hype-animations' ) . '</span></p>';
 		}
 }
 	$hypeupdated = 0;
@@ -262,28 +279,46 @@ function hypeanimations_panel() {
 		$nonce = $_POST['upload_check_oam'];
 		if ( ! wp_verify_nonce( $_POST['upload_check_oam'], 'protect_content' ) ) {
 		    die( 'Security check' ); 
-		} else {
+		} 
+		
+		$allowed_types = array(
+			'oam' => 'application/octet-stream'
+		);
+		
+		$file_info = wp_check_filetype_and_ext(
+			$_FILES['updatefile']['tmp_name'],
+			$_FILES['updatefile']['name'],
+			$allowed_types
+		);
+
+		if (!$file_info['type']) {
+			wp_die(__('Only .oam files are allowed for upload.', 'tumult-hype-animations'));
+		}
+
+		$zip_clean = is_zip_clean($_FILES['updatefile']['tmp_name'], apply_filters('tumult_hype_animations_whitelist', array()));
+		if (is_wp_error($zip_clean)) {
+			// show error message displaying the file extension which is not allowed
+			echo '<p style="font-weight: bold;">' . $zip_clean->get_error_message() . '</p>';
+			wp_delete_file($_FILES['updatefile']['tmp_name']); // Delete the uploaded ZIP file to prevent processing
+			exit;
+		}
+
+		else {
 		
 			if(strpos(basename(sanitize_text_field($_FILES['updatefile']['name'])), " ") !== false)
 			{
 			   echo "<script>alert('You seem to have a space in your animation name. Please remove the space and regenerate the animation.');location.reload();</script>";
 			   die;
 			}
-
-			$actdataid=ceil($_POST['dataid']);
-			$uploaddir = $anims_dir.'tmp/';
+			$actdataid = ceil($_POST['dataid']);
+			$uploaddir = $anims_dir . 'tmp/';
 			$uploadfinaldir = $anims_dir;
+				if (!file_exists($uploaddir)) {
+					wp_mkdir_p($uploaddir);
+				}
 			$uploadfile = $uploaddir . basename(sanitize_file_name($_FILES['updatefile']['name']));
 			if (move_uploaded_file($_FILES['updatefile']['tmp_name'], $uploadfile)) {
 				WP_Filesystem();
-
-			// Check the zip file for disallowed files in memory
-			$zip_clean = is_zip_clean($uploadfile, apply_filters('tumult_hype_animations_whitelist', array()));
-			if (is_wp_error($zip_clean)) {
-				// show error message displaying the file extension which is not allowed
-				echo $zip_clean->get_error_message();
-				exit;
-			}
 
 				// Unzip the file
 				$unzipfile = unzip_file( $uploadfile, $uploaddir);
@@ -294,7 +329,9 @@ function hypeanimations_panel() {
 					wp_delete_file($uploaddir.'/config.xml');
 				}
 				$new_name = str_replace('.oam', '', basename(sanitize_file_name($_FILES['updatefile']['name'])));
-				rename($uploaddir.'Assets/'.$new_name.'.hyperesources', $uploaddir.'Assets/index.hyperesources');
+				if(is_dir($uploaddir.'Assets/'.$new_name.'.hyperesources')) {
+					rename($uploaddir.'Assets/'.$new_name.'.hyperesources', $uploaddir.'Assets/index.hyperesources');
+				}	
 
 				$files = scandir($uploaddir.'Assets/');
 				for ($i=0;isset($files[$i]);$i++) {
@@ -352,7 +389,7 @@ function hypeanimations_panel() {
 
 							fclose($handle);
 						} else {
-							//echo 'error';
+							delete_temp_files($uploaddir);
 						}
 						$update = $wpdb -> query($wpdb->prepare("UPDATE $hypeanimations_table_name SET code=%s,updated=%s WHERE `id` = %d",addslashes(htmlentities($agarder1)), time(), $actdataid));
 						//copy index.html
@@ -364,20 +401,20 @@ function hypeanimations_panel() {
 						if (file_exists($uploaddir.'Assets/')) {
 							hyperrmdir($uploaddir.'Assets/');
 						}
+						delete_temp_files($uploaddir);
 						$hypeupdated=$actdataid;
 						$hypeupdatetd_title=$new_name;
 					}
 				}
 			}
 			else {
-				echo "Erreur";
+				wp_die( __( 'Sorry, there was an issue replacing your oam. Check the logs.', 'tumult-hype-animations' ), 401 );
 			}
 		}
-		//print_r($_FILES);
 	}
  echo '<p style="line-height:0px;clear:both">&nbsp;</p>
 	'.($hypeupdated>0 ? '<p><span style="padding:10px;color:#FFF;background:#009933;">'.$hypeupdatetd_title.' has been updated!</style></p><p>&nbsp;</p>' : '').'
-	<h2>'.__( 'Manage animations' , 'hype-animations' ).'</h2>
+	<h2>'.__( 'Manage animations' , 'tumult-hype-animations' ).'</h2>
 	<table cellpadding="0" cellspacing="0" id="hypeanimations">
 		<thead>
 			<tr>
@@ -385,7 +422,7 @@ function hypeanimations_panel() {
 				<th>Shortcode</th>
 				<th>Notes<br><small>(autosaved)</small></th>
 				<th>Options</th>
-				<th>'.__( 'Last file update' , 'hype-animations' ).'</th>
+				<th>'.__( 'Last file update' , 'tumult-hype-animations' ).'</th>
 				<th>Actions</th>
 			</tr>
 		</thead>
@@ -406,22 +443,22 @@ function hypeanimations_panel() {
 					<textarea name="notes" spellcheck="false" style="resize: vertical; min-height: 20px;">' . stripslashes($results->notes) .  '</textarea>
 				</td>
 				<td align="left" style="text-align:left;">
-					 ' . __( 'Add a container around the animation:', 'hype-animations' ) . '<br>
+					 ' . __( 'Add a container around the animation:', 'tumult-hype-animations' ) . '<br>
 					<select class="hypeanimations_container" name="container">
 							<option value="div" ' . ($results->container == 'div' ? 'selected' : '') . '>&lt;div&gt;</option>
 							<option value="iframe" ' . ($results->container == 'iframe' ? 'selected' : '') . '>&lt;iframe&gt;</option>
 						</select><br>
-					' . __( 'Container CSS class', 'hype-animations' ) .': <br>
+					' . __( 'Container CSS class', 'tumult-hype-animations' ) .': <br>
 					<div ' . ($results->container == 'none' ? 'style="display:none;"' : '') . '>
 							 <input onkeypress="return preventDot(event);" type="text" name="class" spellcheck="false" placeholder="Myclass" style="width:130px;" value="' . esc_attr($results->containerclass) . '">
 					</div>
-					<input type="button" value="' . __( 'Update', 'hype-animations' ) . '" class="updatecontainer" data-id="' . $results->id . '">
+					<input type="button" value="' . __( 'Update', 'tumult-hype-animations' ) . '" class="updatecontainer" data-id="' . $results->id . '">
 				</td>
-				<td>' . ($results->updated == 0 ? '<em>' . __( 'No data', 'hype-animations' ) . '</em>' : date('Y/m/d', $results->updated) . '<br>' . date('H:i:s', $results->updated)) . '</td>
+				<td>' . ($results->updated == 0 ? '<em>' . __( 'No data', 'tumult-hype-animations' ) . '</em>' : date('Y/m/d', $results->updated) . '<br>' . date('H:i:s', $results->updated)) . '</td>
 				<td>
-					<a href="javascript:void(0)" id="' . $results->id . '" class="animcopy">' . __( 'Copy Code', 'hype-animations' ) . '</a>
-					<a href="admin.php?page=hypeanimations_panel&update=' . $results->id . '" class="animupdate" data-id="' . $results->id . '">' . __( 'Replace OAM', 'hype-animations' ) . '</a>
-					<a href="admin.php?page=hypeanimations_panel&delete=' . $results->id . '&_wpnonce=' . $delete_nonce . '" class="animdelete">' . __( 'Delete', 'hype-animations' ) . '</a>
+					<a href="javascript:void(0)" id="' . $results->id . '" class="animcopy">' . __( 'Copy Code', 'tumult-hype-animations' ) . '</a>
+					<a href="admin.php?page=hypeanimations_panel&update=' . $results->id . '" class="animupdate" data-id="' . $results->id . '">' . __( 'Replace OAM', 'tumult-hype-animations' ) . '</a>
+					<a href="admin.php?page=hypeanimations_panel&delete=' . $results->id . '&_wpnonce=' . $delete_nonce . '" class="animdelete">' . __( 'Delete', 'tumult-hype-animations' ) . '</a>
 				</td>
 			</tr>';
 		}
@@ -488,7 +525,7 @@ function hypeanimations_panel() {
 				if (resp=="ok") {
 					if (jQuery(".hypeanimupdated[data-id="+actdataid+"]").length ) { }
 					else {
-						actbutton.after(\'<div class="hypeanimupdated" data-id="\'+actdataid+\'">'.__( 'Updated!' , 'hype-animations' ).'</div>\');
+						actbutton.after(\'<div class="hypeanimupdated" data-id="\'+actdataid+\'">'.__( 'Updated!' , 'tumult-hype-animations' ).'</div>\');
 						setTimeout(function(){
 							jQuery(".hypeanimupdated[data-id="+actdataid+"]").remove();
 						}, 3000);
@@ -496,14 +533,14 @@ function hypeanimations_panel() {
 					// Show any added notes
 					actnotestextarea.val(actnotes);
 				} else {
-					alert("'.__( 'Error, please try again!' , 'hype-animations' ).'");
+					alert("'.__( 'Error, please try again!' , 'tumult-hype-animations' ).'");
 				}
 			});
 		});
 		jQuery(".animupdate").click(function(e){
 			e.preventDefault();
 			dataid=jQuery(this).attr("data-id");
-			jQuery(this).parent().html(\'<form action="" method="post" accept-charset="utf-8" enctype="multipart/form-data"><input type="hidden" name="dataid" value="\'+dataid+\'">'.wp_nonce_field( "protect_content", "upload_check_oam" ).'<input type="file" name="updatefile"> <input type="submit" name="btn_submit_update" value="'.__( 'Update file' , 'hype-animations' ).'" /></form>\');
+			jQuery(this).parent().html(\'<form action="" method="post" accept-charset="utf-8" enctype="multipart/form-data"><input type="hidden" name="dataid" value="\'+dataid+\'">'.wp_nonce_field( "protect_content", "upload_check_oam" ).'<input type="file" name="updatefile"> <input type="submit" name="btn_submit_update" value="'.__( 'Update file' , 'tumult-hype-animations' ).'" /></form>\');
 		});
 		jQuery("#hypeanimations .shortcodeval").click(function(e) {
 			this.select();
@@ -520,19 +557,19 @@ function hypeanimations_panel() {
 				null
 			],
 			language: {
-				processing:     "'.__( 'Processing...' , 'hype-animations' ).'",
-				search:         "'.__( 'Search:' , 'hype-animations' ).'",
-				lengthMenu:    "'.__( 'Show' , 'hype-animations' ).' _MENU_ '.__( 'animations' , 'hype-animations' ).'",
-				info:           "'.__( 'Showing' , 'hype-animations' ).' _START_ '.__( 'to' , 'hype-animations' ).' _END_ '.__( 'of' , 'hype-animations' ).' _TOTAL_ '.__( 'animations' , 'hype-animations' ).'",
-				infoEmpty:      "'.__( 'No animations found.' , 'hype-animations' ).'",
-				loadingRecords: "'.__( 'Loading...' , 'hype-animations' ).'",
-				zeroRecords:    "'.__( 'No animation has been found' , 'hype-animations' ).'",
-				emptyTable:     "'.__( 'No animation has been added' , 'hype-animations' ).'",
+				processing:     "'.__( 'Processing...' , 'tumult-hype-animations' ).'",
+				search:         "'.__( 'Search:' , 'tumult-hype-animations' ).'",
+				lengthMenu:    "'.__( 'Show' , 'tumult-hype-animations' ).' _MENU_ '.__( 'animations' , 'tumult-hype-animations' ).'",
+				info:           "'.__( 'Showing' , 'tumult-hype-animations' ).' _START_ '.__( 'to' , 'tumult-hype-animations' ).' _END_ '.__( 'of' , 'tumult-hype-animations' ).' _TOTAL_ '.__( 'animations' , 'tumult-hype-animations' ).'",
+				infoEmpty:      "'.__( 'No animations found.' , 'tumult-hype-animations' ).'",
+				loadingRecords: "'.__( 'Loading...' , 'tumult-hype-animations' ).'",
+				zeroRecords:    "'.__( 'No animation has been found' , 'tumult-hype-animations' ).'",
+				emptyTable:     "'.__( 'No animation has been added' , 'tumult-hype-animations' ).'",
 				paginate: {
-					first:      "'.__( 'First' , 'hype-animations' ).'",
-					previous:   "'.__( 'Previous' , 'hype-animations' ).'",
-					next:       "'.__( 'Next' , 'hype-animations' ).'",
-					last:       "'.__( 'Last' , 'hype-animations' ).'"
+					first:      "'.__( 'First' , 'tumult-hype-animations' ).'",
+					previous:   "'.__( 'Previous' , 'tumult-hype-animations' ).'",
+					next:       "'.__( 'Next' , 'tumult-hype-animations' ).'",
+					last:       "'.__( 'Last' , 'tumult-hype-animations' ).'"
 				}
 			}
 		});
@@ -801,62 +838,106 @@ function hypeanimations_getcontent(){
 
 		function is_zip_clean($zipFilePath, $allowlist_tumult_hype_animations) {
 			$zip = new ZipArchive;
-			$disallowedExtensions = []; // To store disallowed extensions
-
-			if ($zip->open($zipFilePath) === TRUE) {
-				$flat_allowlist = get_flat_allowlist($allowlist_tumult_hype_animations);
-
-				// Scan the files in the ZIP archive
-				for ($i = 0; $i < $zip->numFiles; $i++) {
-					$filename = $zip->getNameIndex($i);
-					$extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-
-					// Check if the file extension is in the whitelist
-					if (!empty($extension) && !in_array($extension, $flat_allowlist)) {
-						if (!in_array($extension, $disallowedExtensions)) {
-							$disallowedExtensions[] = $extension;
-							error_log(sprintf(
-								__('Disallowed file extension detected: %s in file %s', 'hype-animations'),
-								$extension,
-								$filename
-							));
-						}
-					}
-				}
-
-				$zip->close();
-
-				// Check if there are any disallowed extensions
-				if (!empty($disallowedExtensions)) {
-					$disallowedExtensionsList = implode(', ', $disallowedExtensions);
-					//error_log("Cleaning up due to disallowed extension(s): $disallowedExtensionsList");
-					$requestmoreinfolink = sprintf(
-						__('<br>'.' More info here: %s', 'hype-animations'),
-						'https://forums.tumult.com/t/23637'
-					);
-					return new WP_Error('disallowed_file_type', "The file contains disallowed extension(s): $disallowedExtensionsList. $requestmoreinfolink");
-				}
-
-				// If all files are allowed, return true
-				return true;
+			$disallowedExtensions = [];
+			
+			// Is it a zip file
+			if (!is_readable($zipFilePath) || filesize($zipFilePath) === 0) {
+					return new WP_Error('invalid_file', "Invalid or empty file provided");
 			}
-
-			// Return an error if the zip file failed to open
+	
+			// Check file signature/magic bytes for ZIP format
+			$handle = fopen($zipFilePath, 'rb');
+			$magic = fread($handle, 4);
+			fclose($handle);
+			if ($magic !== "PK\003\004") {
+					return new WP_Error('invalid_zip', "File is not a valid ZIP archive");
+			}
+	
+			if ($zip->open($zipFilePath) === TRUE) {
+					$flat_allowlist = get_flat_allowlist($allowlist_tumult_hype_animations);
+					
+					// Check total number of files
+					if ($zip->numFiles > 1000) {
+							return new WP_Error('too_many_files', "ZIP contains too many files");
+					}
+	
+					// Track required OAM structure
+					$has_required_files = false;
+	
+					for ($i = 0; $i < $zip->numFiles; $i++) {
+							$stat = $zip->statIndex($i);
+							$filename = $zip->getNameIndex($i);
+							$extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+							
+							// Check for directory traversal attempts
+							if (strpos($filename, '..') !== false) {
+									return new WP_Error('path_traversal', "Invalid file path detected");
+							}
+	
+							// Verify OAM structure (should have Assets folder and HTML file)
+							if (strpos($filename, 'Assets/') === 0 && strpos($filename, '.html') !== false) {
+									$has_required_files = true;
+							}
+	
+							// Extension checks
+							if (!empty($extension)) {
+									if (!in_array($extension, $flat_allowlist)) {
+											$disallowedExtensions[] = $extension;
+											error_log(sprintf(
+													__('Disallowed file extension detected: %s in file %s', 'tumult-hype-animations'),
+													$extension,
+													$filename
+											));
+									}
+							}
+					}
+	
+					$zip->close();
+	
+					// Verify OAM structure
+					if (!$has_required_files) {
+							return new WP_Error('invalid_oam', "File does not match OAM structure");
+					}
+	
+					if (!empty($disallowedExtensions)) {
+							$disallowedExtensionsList = implode(', ', array_unique($disallowedExtensions));
+							return new WP_Error(
+									'disallowed_file_type', 
+									sprintf(
+											__("The file contains disallowed extension(s): %s. More info: %s", 'tumult-hype-animations'),
+											$disallowedExtensionsList,
+											'https://forums.tumult.com/t/23637'
+									)
+							);
+					}
+	
+					return true;
+			}
+	
 			error_log("Failed to open the zip file: $zipFilePath");
 			return new WP_Error('zip_open_failed', "Failed to open the zip file.");
-		}
+	}
+	
 
-		function delete_temp_files($directory) {
-			$files = new RecursiveIteratorIterator(
-				new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
-				RecursiveIteratorIterator::CHILD_FIRST
-			);
+function delete_temp_files($directory = null) {
+	if ($directory === null) {
+		$upload_dir = wp_upload_dir();
+		$directory = $upload_dir['basedir'] . '/hypeanimations/tmp/';
+	}
 
-			foreach ($files as $fileinfo) {
-				$todo = ($fileinfo->isDir() ? 'rmdir' : 'unlink');
-				$todo($fileinfo->getRealPath());
-			}
+	if (!is_dir($directory)) {
+		return;
+	}
 
-			rmdir($directory);
-		}
-		
+	$files = new RecursiveIteratorIterator(
+		new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
+		RecursiveIteratorIterator::CHILD_FIRST
+	);
+
+	foreach ($files as $fileinfo) {
+		$todo = ($fileinfo->isDir() ? 'rmdir' : 'unlink');
+		$todo($fileinfo->getRealPath());
+	}
+
+	rmdir($directory);
+	}
