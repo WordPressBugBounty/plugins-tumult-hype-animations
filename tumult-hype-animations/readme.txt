@@ -5,11 +5,12 @@ Contributors: tumultinc, freeben
 Tags: Hype, Animation
 Requires at least: 5.0
 Requires PHP: 7.4
-Tested up to: 6.7
+Tested up to: 6.8
 Stable tag: trunk
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 Description: Easily embed your Tumult Hype animations into posts and pages with a shortcode.
+Update URI: https://wordpress.org/plugins/tumult-hype-animations/
 
 == Description ==
 
@@ -24,6 +25,11 @@ For detailed information and support for this plugin, please visit the [support 
 3. After successful upload, the plugin will generate a shortcode you can use in posts and pages.
 
 == Changelog ==
+
+= 1.9.17 =
+* Animation names can now contain spaces. Avoid foreign characters or symbols.
+* Improve input validation
+* Improvements to translation strings
 
 = 1.9.16 = 
 * Resolves CVE-2024-11082: Authors+ can upload executable files during OAM replacement. Thanks to Wordfence and vgo0 for responsible disclosure. 
