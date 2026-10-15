@@ -5,6 +5,12 @@ function hypeanimations_panel_upload() {
     $upload_dir = wp_upload_dir();
     $anims_dir = $upload_dir['basedir'] . '/hypeanimations/';
 
+	// Only handle uploads posted to this plugin's admin page; ignore other plugins' file fields
+	$page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : '';
+	if ('hypeanimations_panel' !== $page || !isset($_SERVER['REQUEST_METHOD']) || 'POST' !== $_SERVER['REQUEST_METHOD']) {
+		return;
+	}
+
 	if (isset($_FILES['file'])) {
 		// Require a logged-in user with upload capability for uploads
 		if (!is_user_logged_in() || !current_user_can('upload_files')) {
@@ -44,13 +50,13 @@ function hypeanimations_panel_upload() {
 			}
  
         WP_Filesystem();
-        $uploaddir = $anims_dir . 'tmp/';
-        if (!file_exists($uploaddir)) {
-            wp_mkdir_p($uploaddir);
-        }
+        // Unique per-request temp dir so concurrent uploads don't collide or pick up leftovers
+        $uploaddir = $anims_dir . 'tmp/' . wp_generate_uuid4() . '/';
+        wp_mkdir_p($uploaddir);
         $uploadfinaldir = $anims_dir;
         $unzipfile = unzip_file($uploadfile, $uploaddir);
-        if ($unzipfile) {
+        // unzip_file() returns a WP_Error (truthy) on failure
+        if ($unzipfile && !is_wp_error($unzipfile)) {
             if (file_exists($uploadfile)) {
                 wp_delete_file($uploadfile);
             }
@@ -67,7 +73,9 @@ function hypeanimations_panel_upload() {
             
             if (is_wp_error($discovered)) {
                 error_log("Failed to discover OAM structure: " . $discovered->get_error_message());
-                return $discovered;
+                delete_temp_files($uploaddir);
+                echo esc_html($discovered->get_error_message());
+                exit();
             }
 
 			// Ensure folder name is just a basename (defend in-depth against unexpected path chars)
@@ -93,8 +101,11 @@ function hypeanimations_panel_upload() {
 
             // Create final storage directory
             $final_dir = $uploadfinaldir . $lastid . '/';
-            if (!is_dir($final_dir)) {
-                wp_mkdir_p($final_dir);
+            if (!wp_mkdir_p($final_dir)) {
+                error_log('[hypeanimations] Failed to create directory: ' . $final_dir);
+                echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
+                delete_temp_files($uploaddir);
+                exit();
             }
 
             // Set file permissions
@@ -109,35 +120,18 @@ function hypeanimations_panel_upload() {
 			$source_hyperesources = $assets_path . $hyperesources_folder;
 			$target_hyperesources = $final_dir . $hyperesources_folder . '/';
 
-			// Attempt a single rename; if that fails, fall back to a simple recursive copy
+			// Attempt a single rename; if that fails, fall back to a recursive copy
 			if (!@rename($source_hyperesources, $target_hyperesources)) {
 				// If target already exists (unlikely), remove the source. Otherwise attempt recursive copy
 				if (is_dir($target_hyperesources)) {
 					hyperrmdir($source_hyperesources);
 				} else {
-					if (!@mkdir($target_hyperesources, 0755, true)) {
+					// Only remove the source once the copy has fully succeeded
+					if (!wp_mkdir_p($target_hyperesources) || true !== copy_dir($source_hyperesources, $target_hyperesources)) {
 						error_log('[hypeanimations] Failed to move hyperesources from ' . $source_hyperesources . ' to ' . $target_hyperesources);
 						echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
+						delete_temp_files($uploaddir);
 						exit();
-					}
-					$items = scandir($source_hyperesources);
-					foreach ($items as $it) {
-						if ($it === '.' || $it === '..') continue;
-						if (is_dir($source_hyperesources . $it)) {
-							$srcDir = $source_hyperesources . $it . '/';
-							$dstDir = $target_hyperesources . $it . '/';
-							$itFiles = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($srcDir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
-							foreach ($itFiles as $f) {
-								$destPath = $dstDir . substr($f->getPathname(), strlen($srcDir));
-								if ($f->isDir()) {
-									@mkdir($destPath, 0755, true);
-								} else {
-									copy($f->getPathname(), $destPath);
-								}
-							}
-						} else {
-							copy($source_hyperesources . $it, $target_hyperesources . $it);
-						}
 					}
 					hyperrmdir($source_hyperesources);
 				}
@@ -178,7 +172,12 @@ function hypeanimations_panel_upload() {
             );
 
             // Save processed HTML file
-            file_put_contents($final_dir . 'index.html', $html_content);
+            if (false === file_put_contents($final_dir . 'index.html', $html_content)) {
+                error_log('[hypeanimations] Failed to write ' . $final_dir . 'index.html');
+                echo esc_html__('Failed to save the animation HTML file.', 'tumult-hype-animations');
+                delete_temp_files($uploaddir);
+                exit();
+            }
 
             // Cleanup temporary files
             delete_temp_files($uploaddir);
@@ -190,6 +189,7 @@ function hypeanimations_panel_upload() {
             exit();
         } else {
             echo esc_html__('Failed to unzip the file.', 'tumult-hype-animations');
+            wp_delete_file($uploadfile);
             delete_temp_files($uploaddir);
             exit();
         }
@@ -221,7 +221,7 @@ function add_hypeanimations_shortcode_newbutton_footer() {
 	global $hypeanimations_table_name;
 	global $wpdb;
 	global $upload_mb;
-	$nonce_files = wp_nonce_field( 'protect_content', 'upload_check_oam' );
+	$nonce_files = wp_nonce_field( 'protect_content', 'upload_check_oam', true, false );
 	// Getting ini configuration for 'upload_max_filesize'
 	$upload_max_filesize = ini_get('upload_max_filesize');
 	//echo 'upload_max_filesize: ' . $upload_max_filesize . "<br/>";
@@ -333,13 +333,12 @@ function hypeanimations_panel() {
 		__( 'Delete this animation? This action is irreversible. Are you sure?', 'tumult-hype-animations' )
 	);
 
-	echo '<br><h1>' . esc_html__('Tumult Hype Animations', 'tumult-hype-animations') . ' (v' . esc_html($version) . ')</h1>
-	<p>&nbsp;</p>
-	</div>
+	echo '<div class="wrap hypeanimations-admin">
+	<h1>' . esc_html__('Tumult Hype Animations', 'tumult-hype-animations') . ' <span class="hypeanimations-version">v' . esc_html($version) . '</span></h1>
 	<h2>'.__( 'Add new animation' , 'tumult-hype-animations' ).'</h2>
 	<div class="hypeanimbloc">'
 	. $upload_instruction_html . '<br><br>
-	<a href="#openModal1" class="button" id="add_hypeanimations_shortcode_newbutton" style="outline: medium none !important; cursor: pointer;" ><span class="dashicons dashicons-plus-alt" aria-hidden="true"></span> '.__( 'Upload new animation' , 'tumult-hype-animations' ).'</a>
+	<a href="#openModal1" class="button button-primary" id="add_hypeanimations_shortcode_newbutton"><span class="dashicons dashicons-plus-alt" aria-hidden="true"></span> '.__( 'Upload new animation' , 'tumult-hype-animations' ).'</a>
 	</div>';
 
 	// Verify nonce before delete
@@ -355,11 +354,14 @@ function hypeanimations_panel() {
 		}
 
 		$animtitle = $wpdb->get_var($wpdb->prepare("SELECT nom FROM {$hypeanimations_table_name} WHERE id=%d", $delete));
-		$delete = $wpdb->query($wpdb->prepare("DELETE FROM {$hypeanimations_table_name} WHERE id=%d", $delete));
-		hyperrmdir($anims_dir . $delete . '/');
+		$deleted_rows = $wpdb->query($wpdb->prepare("DELETE FROM {$hypeanimations_table_name} WHERE id=%d", $delete));
+		// Only remove the folder of the row that was actually deleted
+		if (1 === $deleted_rows) {
+			hyperrmdir($anims_dir . $delete . '/');
+		}
 
 		if (!empty($animtitle)) {
-			echo '<p>&nbsp;</p><p><span style="padding:10px;color:#FFF;background:#cc0000;">' . esc_html($animtitle) . ' ' . esc_html__( 'has been deleted.', 'tumult-hype-animations' ) . '</span></p>';
+			echo '<div class="notice notice-warning is-dismissible"><p>' . esc_html($animtitle) . ' ' . esc_html__( 'has been deleted.', 'tumult-hype-animations' ) . '</p></div>';
 		}
 	}
 	$hypeupdated = 0;
@@ -369,7 +371,19 @@ function hypeanimations_panel() {
 		if ( ! wp_verify_nonce( $nonce, 'protect_content' ) ) {
 			wp_die(esc_html__('Security check failed', 'tumult-hype-animations'));
 		}
-		
+
+		// Same capability as the initial upload
+		if (!current_user_can('upload_files')) {
+			wp_die(esc_html__('Unauthorized access', 'tumult-hype-animations'));
+		}
+
+		// Only replace an animation that exists, before touching the filesystem
+		$actdataid = absint($_POST['dataid']);
+		$anim_exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$hypeanimations_table_name} WHERE id=%d", $actdataid));
+		if (empty($anim_exists)) {
+			wp_die(esc_html__('Animation not found.', 'tumult-hype-animations'));
+		}
+
 		$allowed_types = array(
 			'oam' => 'application/octet-stream'
 		);
@@ -395,12 +409,11 @@ function hypeanimations_panel() {
 		else {
 		
 			// Allow update uploads with spaces. Server-side sanitization and ZIP checks will validate contents.
-			$actdataid = ceil($_POST['dataid']);
-			$uploaddir = $anims_dir . 'tmp/';
+			// Unique per-request temp dir so concurrent uploads don't collide or pick up leftovers
+			$tmp_id = wp_generate_uuid4();
+			$uploaddir = $anims_dir . 'tmp/' . $tmp_id . '/';
 			$uploadfinaldir = $anims_dir;
-				if (!file_exists($uploaddir)) {
-					wp_mkdir_p($uploaddir);
-				}
+				wp_mkdir_p($uploaddir);
 			$uploadfile = $uploaddir . basename(sanitize_file_name($_FILES['updatefile']['name']));
 			if (move_uploaded_file($_FILES['updatefile']['tmp_name'], $uploadfile)) {
 				WP_Filesystem();
@@ -409,6 +422,12 @@ function hypeanimations_panel() {
 				$unzipfile = unzip_file($uploadfile, $uploaddir);
 				if (file_exists($uploadfile)) {
 					wp_delete_file($uploadfile);
+				}
+				// unzip_file() returns a WP_Error (truthy) on failure; stop before touching the live animation
+				if (!$unzipfile || is_wp_error($unzipfile)) {
+					delete_temp_files($uploaddir);
+					echo esc_html__('Failed to unzip the file.', 'tumult-hype-animations');
+					exit();
 				}
 				if (file_exists($uploaddir . '/config.xml')) {
 					wp_delete_file($uploaddir . '/config.xml');
@@ -433,64 +452,22 @@ function hypeanimations_panel() {
 				$html_base_upd = $discovered_upd['html_base'];
 
 				// Ensure final directory exists
-				if (!is_dir($uploadfinaldir . $actdataid . '/')) {
-					wp_mkdir_p($uploadfinaldir . $actdataid . '/');
+				$anim_dir_upd = $uploadfinaldir . $actdataid . '/';
+				if (!wp_mkdir_p($anim_dir_upd)) {
+					error_log('[hypeanimations] Failed to create directory: ' . $anim_dir_upd);
+					echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
+					delete_temp_files($uploaddir);
+					exit();
 				}
-
-				// Move the discovered hyperesources folder to the final location using the discovered folder name
-				$source = $assets_path_upd . $hyperesources_folder_upd;
-				$target = $uploadfinaldir . $actdataid . '/' . $hyperesources_folder_upd . '/';
-
-				// Move the discovered hyperesources folder to the final location using the discovered folder name
-				$source = $assets_path_upd . $hyperesources_folder_upd;
-				$target = $uploadfinaldir . $actdataid . '/' . $hyperesources_folder_upd . '/';
-
-				// If target exists, remove it first to ensure a clean replace
-				if (file_exists($target)) {
-					hyperrmdir($target);
-				}
-
-				// Attempt a single rename; if that fails, fall back to a simple recursive copy
-				if (!@rename($source, $target)) {
-					if (!@mkdir($target, 0755, true)) {
-						error_log('[hypeanimations] Failed to create target directory: ' . $target);
-						echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
-						delete_temp_files($uploaddir);
-						exit();
-					}
-					$items = scandir($source);
-					foreach ($items as $it) {
-						if ($it === '.' || $it === '..') continue;
-						if (is_dir($source . $it)) {
-							// Recursively copy directories (simple recursive copy)
-							$srcDir = $source . $it . '/';
-							$dstDir = $target . $it . '/';
-							$itFiles = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($srcDir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
-							foreach ($itFiles as $f) {
-								$destPath = $dstDir . substr($f->getPathname(), strlen($srcDir));
-								if ($f->isDir()) {
-									@mkdir($destPath, 0755, true);
-								} else {
-									copy($f->getPathname(), $destPath);
-								}
-							}
-						} else {
-							copy($source . $it, $target . $it);
-						}
-					}
-					// Remove source after copying
-					hyperrmdir($source);
-				}
-
-				// Update database record name
-				$wpdb->update(
-					$hypeanimations_table_name,
-					array('nom' => $original_name, 'updated' => time()),
-					array('id' => $actdataid)
-				);
 
 				// Replace resource references in HTML with the discovered folder name (URL-encoded)
 				$html_content = file_get_contents($assets_path_upd . $html_file_upd);
+				if (false === $html_content) {
+					error_log('[hypeanimations] Failed to read ' . $assets_path_upd . $html_file_upd);
+					echo esc_html__('Failed to save the animation HTML file.', 'tumult-hype-animations');
+					delete_temp_files($uploaddir);
+					exit();
+				}
 				$original_resource_ref = $html_base_upd . '.hyperesources';
 				$web_resource_url = $upload_dir['baseurl'] . '/hypeanimations/' . $actdataid . '/' . rawurlencode($hyperesources_folder_upd);
 				$html_content = str_replace($original_resource_ref, $web_resource_url, $html_content);
@@ -512,14 +489,77 @@ function hypeanimations_panel() {
 					}
 				}
 
+				// Build the new files next to the live ones, then swap, so a failure never leaves the animation broken
+				$source = $assets_path_upd . $hyperesources_folder_upd;
+				$target = $anim_dir_upd . $hyperesources_folder_upd;
+				$staging = $target . '.new-' . $tmp_id;
+				$backup = $target . '.old-' . $tmp_id;
+				$index_file = $anim_dir_upd . 'index.html';
+				$index_new = $index_file . '.new-' . $tmp_id;
+
+				// Attempt a single rename; if that fails, fall back to a recursive copy (source is only removed with the temp dir)
+				if (!@rename($source, $staging)) {
+					if (!wp_mkdir_p($staging) || true !== copy_dir($source, $staging)) {
+						error_log('[hypeanimations] Failed to move hyperesources from ' . $source . ' to ' . $staging);
+						echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
+						hyperrmdir($staging);
+						delete_temp_files($uploaddir);
+						exit();
+					}
+				}
+
+				// Iframe embeds serve index.html, so write the processed HTML there (any existing <Name>.html is left in place)
+				if (false === file_put_contents($index_new, $html_content)) {
+					error_log('[hypeanimations] Failed to write ' . $index_new);
+					echo esc_html__('Failed to save the animation HTML file.', 'tumult-hype-animations');
+					hyperrmdir($staging);
+					delete_temp_files($uploaddir);
+					exit();
+				}
+
+				// Swap: move the live folder aside, put the new one in place, restore the old one on failure
+				$has_old = is_dir($target);
+				if (($has_old && !@rename($target, $backup)) || !@rename($staging, $target)) {
+					if ($has_old && is_dir($backup)) {
+						@rename($backup, $target);
+					}
+					error_log('[hypeanimations] Failed to swap in new hyperesources at ' . $target);
+					echo esc_html__('Failed to move resource files.', 'tumult-hype-animations');
+					hyperrmdir($staging);
+					wp_delete_file($index_new);
+					delete_temp_files($uploaddir);
+					exit();
+				}
+				if (!@rename($index_new, $index_file)) {
+					// Put the old resources back so index.html and the folder stay in sync
+					hyperrmdir($target);
+					if ($has_old) {
+						@rename($backup, $target);
+					}
+					error_log('[hypeanimations] Failed to write ' . $index_file);
+					echo esc_html__('Failed to save the animation HTML file.', 'tumult-hype-animations');
+					wp_delete_file($index_new);
+					delete_temp_files($uploaddir);
+					exit();
+				}
+
+				// The new files are in place; only now remove the old folder
+				if ($has_old) {
+					hyperrmdir($backup);
+				}
+
+				// Update database record name
+				$wpdb->update(
+					$hypeanimations_table_name,
+					array('nom' => $original_name, 'updated' => time()),
+					array('id' => $actdataid)
+				);
+
 				$wpdb->update(
 					$hypeanimations_table_name,
 					array('code' => addslashes(htmlentities($animation_container)), 'updated' => time()),
 					array('id' => $actdataid)
 				);
-
-				// Save processed HTML to final directory
-				file_put_contents($uploadfinaldir . $actdataid . '/' . $html_file_upd, $html_content);
 
 				// Cleanup temporary files
 				if (file_exists($uploaddir . 'Assets/' . $html_file_upd)) {
@@ -534,18 +574,19 @@ function hypeanimations_panel() {
 				$hypeupdatetd_title = $original_name;
 			}
 			else {
+				delete_temp_files($uploaddir);
 				wp_die( __( 'Sorry, there was an issue replacing your oam. Check the logs.', 'tumult-hype-animations' ), 401 );
 			}
 		}
 	}
- echo '<p style="line-height:0px;clear:both">&nbsp;</p>
+ echo '<hr class="wp-header-end">
 	'. ( $hypeupdated > 0
-		? '<p><span style="padding:10px;color:#FFF;background:#009933;">'
+		? '<div class="notice notice-success is-dismissible"><p>'
 			. esc_html( $hypeupdatetd_title ) . ' ' . esc_html__( 'has been updated!', 'tumult-hype-animations' )
-			. '</span></p><p>&nbsp;</p>'
+			. '</p></div>'
 		: '' ) .'
 	<h2>'.__( 'Manage animations' , 'tumult-hype-animations' ).'</h2>
-	<table cellpadding="0" cellspacing="0" id="hypeanimations">
+	<table cellpadding="0" cellspacing="0" id="hypeanimations" class="wp-list-table widefat fixed striped">
 		<thead>
 			<tr>
 				<th>Animation</th>
@@ -563,9 +604,12 @@ function hypeanimations_panel() {
 			// Generate a unique nonce for each delete action
 			$delete_nonce = wp_create_nonce('delete-animation_'.$results->id);
 			//$delete_nonce = wp_create_nonce('update-note_'.$results->id);
+			// Report-only: flag animations whose upload folder is missing or empty
+			$anim_files = glob($anims_dir . intval($results->id) . '/*');
+			$files_missing = empty($anim_files) ? '<br><span class="description" style="color:#b32d2e;">' . esc_html__( 'Files missing: please replace the OAM.', 'tumult-hype-animations' ) . '</span>' : '';
 
 			echo '<tr>
-				<td>' . esc_html($results->nom) . '</td>
+				<td>' . esc_html($results->nom) . $files_missing . '</td>
 				<td>
 					<input class="shortcodeval" type="text" spellcheck="false" value="[hypeanimations_anim id=&quot;' . intval($results->id) . '&quot;]"></input>
 				</td>
@@ -583,13 +627,13 @@ function hypeanimations_panel() {
 					<div ' . ($results->container == 'none' ? 'style="display:none;"' : '') . '>
 							 <input onkeypress="return preventDot(event);" type="text" name="class" spellcheck="false" placeholder="Myclass" style="width:130px;" value="' . esc_attr($results->containerclass) . '">
 					</div>
-					<input type="button" value="' . __( 'Update', 'tumult-hype-animations' ) . '" class="updatecontainer" data-id="' . esc_attr(intval($results->id)) . '">
+					<input type="button" value="' . __( 'Update', 'tumult-hype-animations' ) . '" class="button button-secondary updatecontainer" data-id="' . esc_attr(intval($results->id)) . '">
 				</td>
 				<td>' . ($results->updated == 0 ? '<em>' . __( 'No data', 'tumult-hype-animations' ) . '</em>' : date('Y/m/d', $results->updated) . '<br>' . date('H:i:s', $results->updated)) . '</td>
 				<td>
-					<a href="javascript:void(0)" id="' . esc_attr(intval($results->id)) . '" class="animcopy">' . __( 'Copy Code', 'tumult-hype-animations' ) . '</a>
-					<a href="admin.php?page=hypeanimations_panel&update=' . intval($results->id) . '" class="animupdate" data-id="' . esc_attr(intval($results->id)) . '">' . __( 'Replace OAM', 'tumult-hype-animations' ) . '</a>
-					<a href="admin.php?page=hypeanimations_panel&delete=' . intval($results->id) . '&_wpnonce=' . esc_attr($delete_nonce) . '" class="animdelete" data-title="' . esc_attr($results->nom) . '">' . __( 'Delete', 'tumult-hype-animations' ) . '</a>
+					<a href="javascript:void(0)" id="' . esc_attr(intval($results->id)) . '" class="button button-small animcopy">' . __( 'Copy Code', 'tumult-hype-animations' ) . '</a>
+					<a href="admin.php?page=hypeanimations_panel&update=' . intval($results->id) . '" class="button button-small animupdate" data-id="' . esc_attr(intval($results->id)) . '">' . __( 'Replace OAM', 'tumult-hype-animations' ) . '</a>
+					<a href="admin.php?page=hypeanimations_panel&delete=' . intval($results->id) . '&_wpnonce=' . esc_attr($delete_nonce) . '" class="button button-small button-link-delete animdelete" data-title="' . esc_attr($results->nom) . '">' . __( 'Delete', 'tumult-hype-animations' ) . '</a>
 				</td>
 			</tr>';
 		}
@@ -680,7 +724,7 @@ function hypeanimations_panel() {
 		jQuery(".animupdate").click(function(e){
 			e.preventDefault();
 			dataid=jQuery(this).attr("data-id");
-			jQuery(this).parent().html(\'<form action="" method="post" accept-charset="utf-8" enctype="multipart/form-data"><input type="hidden" name="dataid" value="\'+dataid+\'">'.wp_nonce_field( "protect_content", "upload_check_oam" ).'<input type="file" name="updatefile"> <input type="submit" name="btn_submit_update" value="'.__( 'Update file' , 'tumult-hype-animations' ).'" /></form>\');
+			jQuery(this).parent().html(\'<form action="" method="post" accept-charset="utf-8" enctype="multipart/form-data"><input type="hidden" name="dataid" value="\'+dataid+\'">'.wp_nonce_field( "protect_content", "upload_check_oam", true, false ).'<input type="file" name="updatefile"> <input type="submit" class="button button-secondary" name="btn_submit_update" value="'.__( 'Update file' , 'tumult-hype-animations' ).'" /></form>\');
 		});
 
 		// Localized confirmation templates for deleting an animation
@@ -703,7 +747,7 @@ function hypeanimations_panel() {
 		});
 		jQuery("#hypeanimations").DataTable({
 			responsive: true,
-			"order": [[ 3, "desc" ]],
+			"order": [[ 4, "desc" ]],
 			"columns": [
 				{"name": "Animation", "orderable": "true"},
 				{"name": "Shortcode", "orderable": "true"},
@@ -760,7 +804,8 @@ function hypeanimations_panel() {
 			textarea.closest("tr").find(".updatecontainer").click(); 
 		}, 1000);
 		jQuery("textarea[name=notes]").on("keyup", doneTyping);
-		</script>';
+		</script>
+		</div>';
 		}
 
 		add_action('wp_ajax_hypeanimations_updatecontainer', 'hypeanimations_updatecontainer');
@@ -803,28 +848,6 @@ function hypeanimations_panel() {
     if (isset($response)) {
         echo wp_json_encode($response);
     }
-    exit();
-}
-
-add_action('wp_ajax_hypeanimations_getanimid', 'hypeanimations_getanimid');
-function hypeanimations_getanimid(){
-    if (!current_user_can('edit_posts')) {
-	    wp_die(esc_html__('Unauthorized access', 'tumult-hype-animations'));
-    }
-    
-    global $wpdb;
-    global $hypeanimations_table_name;
-    $response = array();
-	if(!empty($_POST['dataid']) && !empty($_POST['container'])){
-		$post_dataid = intval($_POST['dataid']);
-		$post_container = sanitize_text_field($_POST['container']);
-		$post_containerclass = sanitize_text_field($_POST['containerclass']);
-		$update = $wpdb->query($wpdb->prepare("UPDATE {$hypeanimations_table_name} SET container=%s, containerclass=%s WHERE id=%d", $post_container, $post_containerclass, $post_dataid));
-        $response['response'] = "ok";
-    }
-    else { $response['response'] = "error"; }
-    header( "Content-Type: application/json" );
-    if (isset($response)) { echo wp_json_encode($response); }
     exit();
 }
 
